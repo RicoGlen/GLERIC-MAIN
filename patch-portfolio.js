@@ -14,16 +14,12 @@ const entry = manifest[TARGET_UUID];
 if (!entry) throw new Error('target uuid missing from manifest');
 
 const fieldName = entry.data !== undefined ? 'data' : entry.base64 !== undefined ? 'base64' : 'content';
-console.log('entry keys:', Object.keys(entry), 'using field:', fieldName);
+const original = zlib.gunzipSync(Buffer.from(entry[fieldName], 'base64')).toString('utf8');
 
-const compressed = Buffer.from(entry[fieldName], 'base64');
-const original = zlib.gunzipSync(compressed).toString('utf8');
-
+// --- 1. demos array: add thumbnail image paths ---
 const oldDemosStart = original.indexOf('const demos = [');
 if (oldDemosStart === -1) throw new Error('demos array not found');
 const oldDemosEnd = original.indexOf('];', oldDemosStart) + 2;
-const oldDemosBlock = original.slice(oldDemosStart, oldDemosEnd);
-console.log('--- OLD DEMOS BLOCK ---\n' + oldDemosBlock);
 
 const newDemosBlock = `const demos = [
     {
@@ -31,7 +27,8 @@ const newDemosBlock = `const demos = [
       title: "Restaurant website",
       desc: "Menukaart, reserveringen en sfeer die gasten overtuigt.",
       url: "demo-restaurant.gleric.nl",
-      ph: "restaurant — demo preview",
+      ph: "Atelier 27 — restaurant demo",
+      img: "assets/thumbs/atelier-27.jpg",
       link: "portfolio/atelier-27/index.html",
       external: false
     },
@@ -40,7 +37,8 @@ const newDemosBlock = `const demos = [
       title: "Vakspecialist website",
       desc: "Groepenkast vervangen in Alkmaar & Heiloo — heldere indicatieprijs en WhatsApp-inspectie.",
       url: "groepenkast.info",
-      ph: "groepenkast vervangen — live project",
+      ph: "Groepenkast vervangen — live project",
+      img: "assets/thumbs/groepenkast.jpg",
       link: "https://groepenkastvervangen-info.vercel.app",
       external: true
     },
@@ -49,29 +47,49 @@ const newDemosBlock = `const demos = [
       title: "Detailing website",
       desc: "Premium autodetailing in Heiloo — lakcorrectie, coating en directe afspraken.",
       url: "richierichdetailing.com",
-      ph: "auto detailing — live project",
+      ph: "Richie Rich Detailing — live project",
+      img: "assets/thumbs/detailing.jpg",
       link: "https://richierichdetailing.com",
       external: true
     }];`;
 
 let patched = original.slice(0, oldDemosStart) + newDemosBlock + original.slice(oldDemosEnd);
 
+// --- 2. anchor: per-demo link + external target ---
 const oldAnchor = '<a href="#contact" className="demo__link">';
 const newAnchor = '<a href={d.link} target={d.external ? "_blank" : undefined} rel={d.external ? "noopener noreferrer" : undefined} className="demo__link">';
-if (!patched.includes(oldAnchor)) throw new Error('anchor pattern not found');
-patched = patched.replace(oldAnchor, newAnchor);
+if (patched.includes(oldAnchor)) {
+  patched = patched.replace(oldAnchor, newAnchor);
+} else if (!patched.includes('href={d.link}')) {
+  throw new Error('anchor pattern not found and not already patched');
+}
 
-console.log('\n--- Patched length ---', patched.length, '(was', original.length, ')');
+// --- 3. replace the empty placeholder box with a real screenshot ---
+const oldPh = `<div className="demo__ph">
+                  <span>{d.ph}</span>
+                </div>`;
+const newPh = `<div className="demo__ph">
+                  <img
+                    src={d.img}
+                    alt={d.ph}
+                    loading="lazy"
+                    style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top center", display: "block" }} />
+                </div>`;
+if (patched.includes(oldPh)) {
+  patched = patched.replace(oldPh, newPh);
+} else if (!patched.includes('src={d.img}')) {
+  throw new Error('placeholder block not found and not already patched');
+}
+
+console.log('patched length:', patched.length, '(was', original.length, ')');
 
 const newCompressed = zlib.gzipSync(Buffer.from(patched, 'utf8'));
-const newBase64 = newCompressed.toString('base64');
-entry[fieldName] = newBase64;
+entry[fieldName] = newCompressed.toString('base64');
 if (entry.size !== undefined) entry.size = newCompressed.length;
 
-const newManifestJson = JSON.stringify(manifest);
 const newRaw = raw.slice(0, manifestMatch.index) +
-  `<script type="__bundler/manifest">${newManifestJson}</script>` +
+  `<script type="__bundler/manifest">${JSON.stringify(manifest)}</script>` +
   raw.slice(manifestMatch.index + manifestMatch[0].length);
 
 fs.writeFileSync(filePath, newRaw, 'utf8');
-console.log('\nWrote patched file. New file size:', newRaw.length, '(was', raw.length, ')');
+console.log('wrote index.html:', newRaw.length, '(was', raw.length, ')');
